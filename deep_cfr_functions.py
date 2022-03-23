@@ -17,16 +17,17 @@ from torchvision.io import read_image
 
 class ActionDataset(Dataset):
 
-    def __init__(self, actions, states, ts):
+    def __init__(self, actions, states, ts, amnts):
         self.actions = actions
         self.states = states
         self.ts = ts
+        self.amnts = amnts
 
     def __len__(self):
         return len(self.states)
 
     def __getitem__(self, idx):
-        return self.actions[idx], self.states[idx], self.ts[idx]
+        return self.actions[idx], self.states[idx], self.ts[idx], self.amnts[idx]
 
 
 class History:
@@ -62,8 +63,8 @@ def get_state_array(env, action_player, inaction_player):
     return state
 
 def deep_cfr_minimization(T, N):
-    save_dir1 = Path("p1checkpoints") / datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
-    save_dir2 = Path("p2checkpoints") / datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+    save_dir1 = Path("adv") / datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+    save_dir2 = Path("strat") / datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
     save_dir1.mkdir(parents=True)
     save_dir2.mkdir(parents=True)
     adv0 = deque(maxlen=10000000)
@@ -111,7 +112,7 @@ def deep_cfr_minimization(T, N):
         torch.save(copy_net.state_dict(), str(save_dir2) + "/" + str(t))
     strat_net = AdvantageNet((13 + 4) * 7 + 3, 256).float()
     train(strat, strat_net, 1)
-    torch.save(strat_net.state_dict(), str(save_dir1))
+    torch.save(strat_net.state_dict(), str(save_dir1) + "/" + str(t))
     return strat_net
 
 def traverse(h, p, t1, t2, m_adv, m_strat, t,depth = 0, random_val=.1):
@@ -160,7 +161,7 @@ def traverse(h, p, t1, t2, m_adv, m_strat, t,depth = 0, random_val=.1):
         advantages = torch.from_numpy(advantages)
         if torch.cuda.is_available():
             advantages = advantages.to(device="cuda")
-        m_adv.append(np.array([state, advantages * t, t], dtype=object))
+        m_adv.append(np.array([state, advantages * t, t, amnt], dtype=object))
         return np.max(rewards)
 
     elif h.env.action_player.pnum == 1-p:
@@ -170,7 +171,7 @@ def traverse(h, p, t1, t2, m_adv, m_strat, t,depth = 0, random_val=.1):
             player = t2
 
         action,amnt = player(state)
-        m_strat.append(np.array([state, action * t, t]))
+        m_strat.append(np.array([state, action * t, t, amnt]))
         sm = torch.softmax(action.cpu(), dim=0)
 
         r = np.random.choice([i for i in range(len(action))],
@@ -194,7 +195,7 @@ def lossf(d1, d2, t):
 def train(data, network, indicator):
     data = np.array(data, dtype=object)
     try:
-        train_dataset = ActionDataset(data[:, 1], data[:, 0], data[:, 2])
+        train_dataset = ActionDataset(data[:, 1], data[:, 0], data[:, 2], data[:,3])
         train_loader = DataLoader(train_dataset,
                                   batch_size=256,
                                   pin_memory=False)
@@ -203,31 +204,33 @@ def train(data, network, indicator):
         train_iters = 1000
         batch_size = 1
         num_batches = int(np.ceil(len(data) / batch_size))
-        if indicator == 1:
-            torch.nn.init.xavier_uniform_(network.sig_layers)
+
         for i in range(train_iters):
             ts = []
             actions = []
             data_actions = []
+            pred_amnts = []
             optimizer.zero_grad()
-            for batch, (data_action, state, t) in enumerate(train_loader):
-                data_action, state, t = data_action.to(device="cuda"), state.to(device="cuda"), t.to(device="cuda")
+            for batch, (data_action, state, t, amnts) in enumerate(train_loader):
+                data_action, state, t, amnts = data_action.to(device="cuda"), state.to(device="cuda"), t.to(device="cuda"), amnts.to(device="cuda")
 
-                action = network(state)[:-1]
+                action, pred_amnt = network(state)
 
                 if indicator:
                     action = network.sm(action)
 
                 ts.append(t)
-                actions.append(action[0])
+                actions.append(action)
                 data_actions.append(data_action)
-
+                pred_amnts.append(pred_amnt)
             # sqrt_t = np.sqrt(ts)
             # #sqrt_t = np.array([[i,i,i] for i in sqrt_t])
             # x1 = np.multiply(sqrt_t, actions)
             # x2 = np.multiply(sqrt_t, data_actions)
             # loss = loss_fun(x1,x2)
             loss = lossf(actions, data_actions, ts)
+            if indicator == 1:
+                loss += lossf(amnts, pred_amnts)
 
             loss = loss.clone().detach()
             loss.requires_grad = True
@@ -236,4 +239,4 @@ def train(data, network, indicator):
     except Exception as e:
         print("list empty")
 
-deep_cfr_minimization(20, 20)
+deep_cfr_minimization(2, 2)
