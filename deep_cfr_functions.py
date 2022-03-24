@@ -62,14 +62,32 @@ def get_state_array(env, action_player, inaction_player):
     state = torch.tensor(state_array)
     return state
 
+def non_zero_test(network):
+    env = PokerEnv((.5, 1), 100)
+    # Pocket Aces should be raised.
+    env.game.p1.card_1 = (12, 0)
+    env.game.p1.card_2 = (12, 1)
+
+    env.game.p2.card_1 = (4, 2)
+    env.game.p2.card_2 = (8, 3)
+    state_array = get_state_array(env, env.game.p1, env.game.p2)
+    if torch.cuda.is_available():
+        state_array = state_array.to(device="cuda")
+    action, amnt = network(state_array)
+    if action[0] == 0 and action[1] == 0 and action[2] == 0:
+        print("All zeros")
+
+
 def deep_cfr_minimization(T, N):
-    save_dir1 = Path("adv") / datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
-    save_dir2 = Path("strat") / datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+    save_dir1 = Path("strat") / datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+    save_dir2 = Path("adv") / datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
     save_dir1.mkdir(parents=True)
     save_dir2.mkdir(parents=True)
     adv0 = deque(maxlen=10000000)
     adv1 = deque(maxlen=10000000)
     strat = deque(maxlen=100000000)
+
+    strat_net = AdvantageNet((13 + 4) * 7 + 3, 256).float()
 
     t0 = AdvantageNet((13 + 4) * 7 + 3, 256).float()
 
@@ -82,6 +100,7 @@ def deep_cfr_minimization(T, N):
         print("Using cuda")
         t0 = t0.to(device="cuda")
         t1 = t1.to(device="cuda")
+        strat_net = strat_net.to(device="cuda")
 
     for t in range(T):
         p = t % 2
@@ -91,8 +110,8 @@ def deep_cfr_minimization(T, N):
         for n in range(N):
             randomness *= gamma
             init_history.env.done = False
-            if init_history.env.game.p1.stack_size <=0 or init_history.env.game.p2.stack_size <=0:
-                init_history.env.reset([1,.5], 100)
+
+            init_history.env.reset([1,.5], np.random.randint(10,500))
 
             if p == 0:
                 mr = traverse(init_history, p, t0, t1, adv0, strat, t + 1,random_val=randomness)
@@ -108,9 +127,10 @@ def deep_cfr_minimization(T, N):
             copy_net = copy.deepcopy(t1)
             train(adv0, t1, 0)
             t0 = copy_net
+        non_zero_test(copy_net)
         print(f"Last reward: {mr}")
         torch.save(copy_net.state_dict(), str(save_dir2) + "/" + str(t))
-    strat_net = AdvantageNet((13 + 4) * 7 + 3, 256).float()
+
     train(strat, strat_net, 1)
     torch.save(strat_net.state_dict(), str(save_dir1) + "/" + str(t))
     return strat_net
@@ -123,12 +143,6 @@ def traverse(h, p, t1, t2, m_adv, m_strat, t,depth = 0, random_val=.1):
     state = get_state_array(h.env,h.env.action_player,h.env.inaction_player)
     if torch.cuda.is_available():
         state = state.to(device="cuda")
-
-    if np.random.random() <= random_val:
-        action = np.random.randint(0,4)
-        amnt = np.random.randint(0,100)
-        h.env.step(action, amnt)
-        return traverse(h, p, t1, t2, m_adv, m_strat,t, depth + 1,random_val=random_val)
 
     if h.env.action_player.pnum == p:  # Player gets to choose
         if p == 0:
@@ -156,7 +170,7 @@ def traverse(h, p, t1, t2, m_adv, m_strat, t,depth = 0, random_val=.1):
 
         advantages = []
         for i in range(len(action)):
-            advantages.append(np.array(rewards[i]) - reward)
+            advantages.append(np.array(rewards[i]))
         advantages = np.array(advantages)
         advantages = torch.from_numpy(advantages)
         if torch.cuda.is_available():
@@ -184,7 +198,7 @@ def traverse(h, p, t1, t2, m_adv, m_strat, t,depth = 0, random_val=.1):
 
 
 
-def lossf(d1, d2, t):
+def lossf(d1, d2):
 
     d1 = torch.cat(d1)
     d2 = torch.cat(d2)
@@ -200,19 +214,18 @@ def train(data, network, indicator):
                                   batch_size=256,
                                   pin_memory=False)
         optimizer = torch.optim.Adam(network.parameters(), lr=0.001)
-        loss_fun = torch.nn.MSELoss()
         train_iters = 1000
-        batch_size = 1
-        num_batches = int(np.ceil(len(data) / batch_size))
 
         for i in range(train_iters):
             ts = []
             actions = []
             data_actions = []
             pred_amnts = []
+            amnts = []
             optimizer.zero_grad()
-            for batch, (data_action, state, t, amnts) in enumerate(train_loader):
-                data_action, state, t, amnts = data_action.to(device="cuda"), state.to(device="cuda"), t.to(device="cuda"), amnts.to(device="cuda")
+            for batch, (data_action, state, t, amnt) in enumerate(train_loader):
+                data_action, state, t, amnt = data_action.to(device="cuda"), state.to(device="cuda"), t.to(device="cuda"), amnt.to(device="cuda")
+
 
                 action, pred_amnt = network(state)
 
@@ -223,12 +236,9 @@ def train(data, network, indicator):
                 actions.append(action)
                 data_actions.append(data_action)
                 pred_amnts.append(pred_amnt)
-            # sqrt_t = np.sqrt(ts)
-            # #sqrt_t = np.array([[i,i,i] for i in sqrt_t])
-            # x1 = np.multiply(sqrt_t, actions)
-            # x2 = np.multiply(sqrt_t, data_actions)
-            # loss = loss_fun(x1,x2)
-            loss = lossf(actions, data_actions, ts)
+                amnts.append(amnt)
+
+            loss = lossf(actions, data_actions)
             if indicator == 1:
                 loss += lossf(amnts, pred_amnts)
 
@@ -239,4 +249,4 @@ def train(data, network, indicator):
     except Exception as e:
         print("list empty")
 
-deep_cfr_minimization(2, 2)
+deep_cfr_minimization(5, 150)

@@ -39,7 +39,7 @@ class AdvantageNet(nn.Module):
 
 
         self.rl = nn.ReLU()
-        self.sm = nn.Softmax()
+        self.sm = nn.Softmax(dim=1)
 
 
         self.init_weights()
