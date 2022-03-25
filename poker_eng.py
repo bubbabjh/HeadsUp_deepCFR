@@ -41,6 +41,11 @@ class PokerEnv(gym.Env):
         obs = self._next_observation()
         self._take_action(action, amnt)
 
+        self.done = True if self.action_player.last_win != 0 else False
+
+        self.reward = self.action_player.last_win
+        # reward -= abs(action_player.expected_ev - action[-1])
+        self.action_player.last_win = 0
 
         if self.game.action_player == 0:
             self.action_player = self.game.p1
@@ -48,12 +53,6 @@ class PokerEnv(gym.Env):
         else:
             self.action_player = self.game.p2
             self.inaction_player = self.game.p1
-
-        self.done = True if self.action_player.last_win != 0 else False
-
-        self.reward = self.action_player.last_win * .1
-        # reward -= abs(action_player.expected_ev - action[-1])
-        self.action_player.last_win = 0
 
         self.state = [self.action_player.card_1, self.action_player.card_2, self.game.board, self.game.pot_size,
                       self.action_player.stack_size, self.inaction_player.stack_size]

@@ -120,13 +120,13 @@ class HeadsUpPokerGame:
         self.p1.starting_stack_size = self.p1.stack_size
         self.p2.starting_stack_size = self.p2.stack_size
         if self.sb_player == 0:
-            self.p1.stack_size -= self.blinds[0]
-            self.p2.stack_size -= self.blinds[1]
-        else:
-            self.p2.stack_size -= self.blinds[0]
             self.p1.stack_size -= self.blinds[1]
+            self.p2.stack_size -= self.blinds[0]
+        else:
+            self.p2.stack_size -= self.blinds[1]
+            self.p1.stack_size -= self.blinds[0]
         self.pot_size += self.blinds[0] + self.blinds[1]
-        self.to_call = self.blinds[1] - self.blinds[0]
+        self.to_call = self.blinds[0] - self.blinds[1]
         if self.p1.stack_size <= 0 or self.p2.stack_size <= 0:
             self.game_over = 1
 
@@ -178,125 +178,120 @@ class HeadsUpPokerGame:
             self.action_player = 1 - self.sb_player
 
     def take_action(self, action, bet_size):
+        if self.to_call <= 0 and action == 1:
+            action = 0
         self.p1.last_win = 0
         self.p2.last_win = 0
         try:
 
+            if not (action == 0):
 
+                if self.started_new_phase:
+                    self.set_action()
 
-            if self.started_new_phase:
-                self.set_action()
+                acting_p = self.p1 if self.action_player == 0 else self.p2
+                inacting_p = self.p2 if self.action_player == 0 else self.p1
 
-            acting_p = self.p1 if self.action_player == 0 else self.p2
-            inacting_p = self.p2 if self.action_player == 0 else self.p1
+                if acting_p.stack_size < 0:
+                    inacting_p.stack_size += acting_p.stack_size
+                    acting_p.stack_size = 0
+                if inacting_p.stack_size < 0:
+                    acting_p.stack_size += inacting_p.stack_size
+                    inacting_p.stack_size = 0
 
-            if acting_p.stack_size < 0:
-                inacting_p.stack_size += acting_p.stack_size
-                acting_p.stack_size = 0
-            if inacting_p.stack_size < 0:
-                acting_p.stack_size += inacting_p.stack_size
-                inacting_p.stack_size = 0
-
-            # If all in continue to next step. Doesn't matter who it is
-            if (acting_p.stack_size <= 0) and self.phase != "showdown": # FIXME Go to showdown
-                while self.phase != "showdown":
+                # If all in continue to next step. Doesn't matter who it is
+                if (acting_p.stack_size <= 0) and self.phase != "showdown": # FIXME Go to showdown
+                    while self.phase != "showdown":
+                        self.next_card()
+                    return
+                elif acting_p.stack_size <= 0:
+                    winner = self.determine_winner()
+                    if winner == "tie":
+                        self.p1.stack_size += self.pot_size / 2
+                        self.p2.stack_size += self.pot_size / 2
+                    elif winner == "p1":
+                        self.p1.stack_size += self.pot_size
+                    elif winner == "p2":
+                        self.p2.stack_size += self.pot_size
+                    self.pot_size = 0
+                    self.p1.last_win = self.p1.stack_size - self.p1.starting_stack_size
+                    self.p2.last_win = self.p2.stack_size - self.p2.starting_stack_size
+                    self.to_call = 0
+                    self.all_cards()
+                    self.deal_cards()
+                    self.sb_player = 1 - self.sb_player
+                    self.do_blinds()
+                    return
+                elif inacting_p.stack_size <= 0 and self.to_call <= 0 and self.phase != "showdown":
                     self.next_card()
-                return
-            elif acting_p.stack_size <= 0:
-                winner = self.determine_winner()
-                if winner == "tie":
-                    self.p1.stack_size += self.pot_size / 2
-                    self.p2.stack_size += self.pot_size / 2
-                elif winner == "p1":
-                    self.p1.stack_size += self.pot_size
-                elif winner == "p2":
-                    self.p2.stack_size += self.pot_size
-                self.pot_size = 0
-                self.p1.last_win = self.p1.stack_size - self.p1.starting_stack_size
-                self.p2.last_win = self.p2.stack_size - self.p2.starting_stack_size
-                self.to_call = 0
-                self.all_cards()
-                self.deal_cards()
-                self.sb_player = 1 - self.sb_player
-                self.do_blinds()
-                return
-            elif inacting_p.stack_size <= 0 and self.to_call <= 0 and self.phase != "showdown":
-                self.next_card()
-                return
-            elif inacting_p.stack_size <= 0 and self.to_call <= 0:
-                winner = self.determine_winner()
-                if winner == "tie":
-                    self.p1.stack_size += self.pot_size / 2
-                    self.p2.stack_size += self.pot_size / 2
-                if winner == "p1":
-                    self.p1.stack_size += self.pot_size
-                if winner == "p2":
-                    self.p2.stack_size += self.pot_size
-                self.pot_size = 0
-                self.p1.last_win = self.p1.stack_size - self.p1.starting_stack_size
-                self.p2.last_win = self.p2.stack_size - self.p2.starting_stack_size
-                self.to_call = 0
-                self.all_cards()
-                self.deal_cards()
-                self.sb_player = 1 - self.sb_player
-                self.do_blinds()
-                return
-
-        # For index 0 of action, 0 is Fold/Check, 1 is check/call, 2 is bet/raise/re-raise
-            # For index 1 of action, % of pot to bet if action index 0 is 2, or to call if action is 1
-            folded = False
-            chosen_action = action
-
-
-            if bet_size < 1 and chosen_action == 2:
-                bet_size = 1
-
-            if chosen_action == 2 and inacting_p.stack_size <= 0:
-                chosen_action = 1
-
-            if chosen_action == 2 and self.to_call * 2 >= self.pot_size * bet_size:
-                bet_size = 2 * self.to_call
-
-            if bet_size >= acting_p.stack_size:
-                bet_size = acting_p.stack_size
-
-            if chosen_action == 0:
-                if self.to_call != 0:
-                    folded = True
+                    return
+                elif inacting_p.stack_size <= 0 and self.to_call <= 0:
+                    winner = self.determine_winner()
+                    if winner == "tie":
+                        self.p1.stack_size += self.pot_size / 2
+                        self.p2.stack_size += self.pot_size / 2
+                    if winner == "p1":
+                        self.p1.stack_size += self.pot_size
+                    if winner == "p2":
+                        self.p2.stack_size += self.pot_size
+                    self.pot_size = 0
+                    self.p1.last_win = self.p1.stack_size - self.p1.starting_stack_size
+                    self.p2.last_win = self.p2.stack_size - self.p2.starting_stack_size
                     self.to_call = 0
-                else:
-                    pass
-            elif chosen_action == 1:
-                if self.to_call == 0: # Check
-                    self.to_call = 0
-                    pass
-                else: # Call
-                    if acting_p.stack_size >= self.to_call:
-                        acting_p.stack_size -= self.to_call
-                        self.pot_size += self.to_call
+                    self.all_cards()
+                    self.deal_cards()
+                    self.sb_player = 1 - self.sb_player
+                    self.do_blinds()
+                    return
+
+            # For index 0 of action, 0 is Fold/Check, 1 is check/call, 2 is bet/raise/re-raise
+                # For index 1 of action, % of pot to bet if action index 0 is 2, or to call if action is 1
+                folded = False
+                chosen_action = action
+
+                if bet_size < 1:
+                    bet_size = 1
+
+                if chosen_action == 2 and inacting_p.stack_size <= 0:
+                    chosen_action = 1
+
+                if chosen_action == 2 and self.to_call * 2 >= self.pot_size * bet_size:
+                    bet_size = 2 * self.to_call
+
+                if bet_size >= acting_p.stack_size:
+                    bet_size = acting_p.stack_size
+
+                if chosen_action == 1:
+                    if self.to_call == 0: # Check
                         self.to_call = 0
-                        if (inacting_p.stack_size <= 0) and self.phase != "showdown":
+                        pass
+                    else: # Call
+                        if acting_p.stack_size >= self.to_call:
+                            acting_p.stack_size -= self.to_call
+                            self.pot_size += self.to_call
+                            self.to_call = 0
+                            if (inacting_p.stack_size <= 0) and self.phase != "showdown":
+                                while self.phase != "showdown":
+                                    self.next_card()
+
+                        else: # All in
+                            self.pot_size += acting_p.stack_size
+                            acting_p.stack_size = 0
                             while self.phase != "showdown":
                                 self.next_card()
+
+
+                elif chosen_action == 2: # Raise
+                    if acting_p.stack_size >= bet_size:
+                        acting_p.stack_size -= bet_size
+                        self.pot_size += bet_size
+                        self.to_call = bet_size - self.to_call
 
                     else: # All in
                         self.pot_size += acting_p.stack_size
                         acting_p.stack_size = 0
-                        while self.phase != "showdown":
-                            self.next_card()
 
 
-            elif chosen_action == 2: # Raise
-                if acting_p.stack_size >= bet_size:
-                    acting_p.stack_size -= bet_size
-                    self.pot_size += bet_size
-                    self.to_call = bet_size - self.to_call
-
-                else: # All in
-                    self.pot_size += acting_p.stack_size
-                    acting_p.stack_size = 0
-
-            if not folded:
                 self.action_player = 1 - self.action_player
                 if chosen_action != 2 and not self.started_new_phase and self.phase != "showdown":
                     self.next_card()
@@ -320,7 +315,6 @@ class HeadsUpPokerGame:
                     self.do_blinds()
                     return
                 self.started_new_phase = False
-
             else:
                 if self.action_player == 0: # p1 folds
                     self.p2.stack_size += self.pot_size
